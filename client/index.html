@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <title>Canvas Syncing II</title>
+  <meta charset="utf-8"/>
+  <style>
+    html, body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      padding:0;
+    }
+    
+    canvas {
+      margin: 10px;
+      border: 1px solid black;
+    }
+  
+    form {
+      margin: 10px;
+    }
+    
+    .hidden {
+      display: none;
+    }
+  </style>
+	<script src="/socket.io/socket.io.js"></script>
+  <script src="https://npmcdn.com/babel-core@5.8.38/browser.min.js"></script>
+  <script type="text/babel" >
+    "use strict";
+
+    let canvas;
+    let ctx;
+    let avatar;
+    let groundImage;
+    let pattern;
+    let socket;
+    let players = {};
+    let hash;
+    let self;
+
+    const update = (data) => {
+      if(!players[data.hash]) {
+        players[data.hash] = data;
+        return;
+      }
+      
+      if(players[data.hash].lastUpdate >= data.lastUpdate) {
+        return;
+      }
+      
+      const player = players[data.hash];
+      player.lastUpdate = data.lastUpdate;
+      player.prevX = data.prevX;
+      player.prevY = data.prevY;
+      player.destX = data.destX;
+      player.destY = data.destY;
+      player.alpha = 0;
+      player.moveLeft = data.moveLeft;
+      player.moveRight = data.moveRight;
+      player.moveUp = data.moveUp;
+      player.moveDown = data.moveDown;
+      player.colliding = data.colliding;
+      
+      self = player;
+    };
+
+    const lerp = (v0, v1, alpha) => {
+      return (1 - alpha) * v0 + alpha * v1;
+    };
+
+    const updatePosition = () => {
+      const player = players[hash];
+      
+      player.prevX = player.x;
+      player.prevY = player.y;
+      
+      if(player.moveLeft && player.destX > 0) {
+        player.destX -= 3;
+      }
+      if(player.moveRight && player.destX < 500) {
+        player.destX += 3;
+      }
+      if(player.moveUp && player.destY > 0) {
+        player.destY -= 3;
+      }
+      if(player.moveDown && player.destY < 500) {
+        player.destY += 3;
+      }
+      
+      player.alpha = 0;
+      
+      socket.emit('movementUpdate', player);
+    };
+
+    const redraw = (time) => {
+      updatePosition();
+      
+      ctx.clearRect(0, 0, 600, 600);
+      ctx.filter = "none";
+      ctx.fillStyle = pattern;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      
+      const keys = Object.keys(players);
+      
+      for(let i = 0; i < keys.length; i++) {
+        const player = players[keys[i]];
+        
+        if(player.alpha < 1) {
+          player.alpha += 0.05;
+        }
+        
+        player.x = lerp(player.prevX, player.destX, player.alpha);
+        player.y = lerp(player.prevY, player.destY, player.alpha);
+        player.cx = player.x + 50;
+        player.cy = player.y + 50;
+        
+        if(player.hash !== self.hash) {
+          if(Math.abs(self.cx - player.cx) < self.r && Math.abs(self.cy - player.cy) < self.r) {
+            player.colliding = true;
+            socket.emit('collideUpdate', player.hash);
+          } else {
+            player.colliding = false;
+          }
+        }
+        
+        ctx.drawImage(avatar, player.x, player.y);
+      }
+      
+      requestAnimationFrame(redraw);
+    };
+
+    const setUser = (data) => {
+      hash = data.hash;
+      players[hash] = data;
+      self = data;
+      requestAnimationFrame(redraw);
+    };
+
+    const removeUser = (hash) => {
+      if(players[hash]) {
+        delete players[hash];
+      }
+    };
+
+    const checkCollision = (data) => {
+      if(players[data]) {
+        players[data].engaged = true;
+      }
+    }
+
+    const keyDownHandler = (e) => {
+      let keyPressed = e.which;
+      const player = players[hash];
+      
+      if(player.colliding && keyPressed === 32) {
+        player.engaged = true;
+      }
+
+      if(!player.engaged) {
+        if(keyPressed === 87 || keyPressed === 38) {
+            player.moveUp = true;
+        }
+        else if(keyPressed === 65 || keyPressed === 37) {
+            player.moveLeft = true;
+        }
+        else if(keyPressed === 83 || keyPressed === 40) {
+            player.moveDown = true;
+        }
+        else if(keyPressed === 68 || keyPressed === 39) {
+            player.moveRight = true;
+        }
+      }
+      
+      if(player.moveUp || player.moveDown || player.moveLeft || player.moveRight) {
+        e.preventDefault();
+      }
+    };
+
+    const keyUpHandler = (e) => {
+      let keyPressed = e.which;
+      const player = players[hash];
+      
+      if(keyPressed === 87 || keyPressed === 38) {
+        player.moveUp = false;
+      }
+      else if(keyPressed === 65 || keyPressed === 37) {
+        player.moveLeft = false;
+      }
+      else if(keyPressed === 83 || keyPressed === 40) {
+        player.moveDown = false;
+      }
+      else if(keyPressed === 68 || keyPressed === 39) {
+        player.moveRight = false;
+      }
+    };
+
+    const init = () => {
+      groundImage = document.querySelector('#background');
+      avatar = document.querySelector('#avatar');
+      
+      canvas = document.querySelector('#canvas');
+      ctx = canvas.getContext('2d');
+      
+      socket = io.connect();
+      
+      pattern = ctx.createPattern(groundImage, 'repeat');
+      
+      socket.on('joined', setUser);
+      
+      socket.on('updatedMovement', update);
+      
+      socket.on('updatedCollision', checkCollision);
+      
+      socket.on('disconnect', removeUser);
+      
+      document.body.addEventListener('keydown', keyDownHandler);
+      document.body.addEventListener('keyup', keyUpHandler);
+    };
+
+    window.onload = init;
+  </script>
+</head>
+<body>
+	<canvas id="canvas" height="600" width="600"></canvas>
+  <img id="avatar" class="hidden" src="coin.jpg" alt="coin jpg" />
+  <img id="background" class="hidden" src="ground.png" alt="ground png" />
+</body>
+</html>
